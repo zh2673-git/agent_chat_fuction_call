@@ -1,0 +1,11 @@
+{
+  "weather": {
+    "api_key": "your_weather_api_key",
+    "api_url": "https://api.weather.com/v1/query"
+  },
+  "translation": {
+    "api_key": "your_translation_api_key",
+    "service": "google",
+    "api_url": "https://translation.googleapis.com/language/translate/v2"
+  }
+}

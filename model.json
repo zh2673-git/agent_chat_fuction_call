@@ -1,0 +1,16 @@
+{
+  "openai": {
+    "api_key": "your_openai_api_key",
+    "models": {
+      "gpt-3.5-turbo": "https://api.openai.com/v1/chat/completions",
+      "gpt-4": "https://api.openai.com/v1/chat/completions"
+    }
+  },
+  "deepseek": {
+    "api_key": "your_deepseek_api_key",
+    "models": {
+      "deepseek-model-1": "https://api.deepseek.com/v1/chat/completions",
+      "deepseek-model-2": "https://api.deepseek.com/v2/chat/completions"
+    }
+  }
+}
