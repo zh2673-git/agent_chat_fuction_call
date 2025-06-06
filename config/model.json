@@ -1,0 +1,13 @@
+{
+  "openai": {
+    "api_key": "use_env_variable",
+    "api_url": "https://api.openai.com/v1/",
+    "model_name": "gpt-3.5-turbo"
+  },
+  "modelscope": {
+    "api_key": "use_env_variable",
+    "api_url": "https://api-inference.modelscope.cn/v1/",
+    "model_name": "Qwen/Qwen3-235B-A22B"
+  }
+}
+

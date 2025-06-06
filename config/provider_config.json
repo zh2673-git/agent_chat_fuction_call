@@ -1,0 +1,6 @@
+{
+  "modelscope": {
+    "timeout": 30,
+    "max_retries": 3
+  }
+}
