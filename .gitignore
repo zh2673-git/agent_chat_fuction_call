@@ -1,0 +1,29 @@
+# .gitignore
+# Environment variables
+.env
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and editor directories
+.vscode/
+.idea/
+
+# Log files
+*.log
+
+# Local development files
+local_settings.py
+
+# Test and coverage files
+.coverage
+htmlcov/
+
+# macOS system files
+.DS_Store
+
+# Windows system files
+Thumbs.db 
