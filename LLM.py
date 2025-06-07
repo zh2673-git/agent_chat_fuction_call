@@ -1,10 +1,10 @@
 import json
 import os
 import importlib
-from typing import Dict, Any, Optional, Union, Generator, Iterator
+from typing import Dict, Any, Optional, Union, Generator, Iterator, List
 import requests
 from pathlib import Path
-from providers import BaseProvider
+from providers import BaseProvider, get_provider
 
 class ModelConfig:
     def __init__(self, config_file: str = "model.json"):
@@ -48,120 +48,71 @@ class ModelConfig:
         }
 
 class LargeLanguageModel:
-    def __init__(self, model_provider: str, model_name: Optional[str] = None, debug: bool = False):
+    def __init__(self, provider_name: str, model_name: Optional[str] = None, debug: bool = False):
         """
-        初始化大语言模型调用类
-        :param model_provider: 模型供应商名称（如 openai/modelscope）
-        :param model_name: 具体模型名称（如 gpt-4/qwen-max），如果为None则使用配置文件中的默认值
+        初始化大语言模型
+        :param provider_name: 提供商名称
+        :param model_name: 模型名称，如果为None则使用提供商的默认模型
         :param debug: 是否启用调试模式
         """
-        self.model_provider = model_provider
+        self.provider_name = provider_name
         self.model_name = model_name
-        self.debug = debug  # 确保此行在provider初始化之前
-        self.provider = self._load_provider(model_provider, model_name)
+        self.debug = debug
+        
+        # 加载配置
+        self.config = self._load_config()
+        
+        # 初始化提供商
+        provider_config = self.config.get(provider_name, {})
+        if model_name:
+            provider_config["model_name"] = model_name
+        
+        provider_config["debug"] = debug
+        
+        # 使用get_provider函数获取提供商实例
+        self.provider = get_provider(provider_name, provider_config)
+        
+        if debug:
+            print(f"初始化LLM，提供商: {provider_name}, 模型: {model_name or '默认'}")
 
-    def _debug_print(self, *args, **kwargs):
-        """调试信息打印函数，只在调试模式下输出"""
-        if self.debug:
-            print(*args, **kwargs)
-
-    def _load_provider(self, provider_name: str, model_name: Optional[str] = None) -> 'BaseProvider':
-        """
-        动态加载模型供应商实现
-        :param provider_name: 供应商名称（对应 providers/ 下的模块名）
-        :param model_name: 具体模型名称，如果为None则使用配置文件中的默认值
-        :return: 供应商实例
-        """
+    def _load_config(self) -> Dict[str, Any]:
+        """加载配置文件"""
+        config_path = os.path.join("config", "provider_config.json")
         try:
-            # 导入providers包
-            import providers
-            
-            # 获取对应的提供商类
-            provider_class_name = f"{provider_name.capitalize()}Provider"
-            if not hasattr(providers, provider_class_name):
-                raise ValueError(f"未找到供应商类: {provider_class_name}")
-                
-            provider_class = getattr(providers, provider_class_name)
-            
-            # 从配置文件加载配置
-            provider_config = self._load_provider_config(provider_name)
-            
-            # 添加模型名称到配置中
-            if model_name:
-                # 检查模型是否在支持列表中
-                if "supported_models" in provider_config and model_name not in provider_config["supported_models"]:
-                    self._debug_print(f"警告: 模型 {model_name} 不在 {provider_name} 的支持列表中")
-                provider_config["model_name"] = model_name
-            elif "default_model" in provider_config:
-                provider_config["model_name"] = provider_config["default_model"]
-                
-            # 创建提供商实例
-            return provider_class.from_config(provider_config)
-            
-        except ImportError as e:
-            raise ValueError(f"导入提供商模块失败: {e}")
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception as e:
-            raise ValueError(f"加载提供商 {provider_name} 失败: {e}")
+            print(f"加载配置文件失败: {e}")
+            return {}
 
-    def _load_provider_config(self, provider_name: str) -> dict:
+    def generate_response(self, prompt: str, tools: Optional[List[Dict]] = None, stream: bool = False) -> Union[str, Dict, Generator]:
         """
-        加载提供商配置
-        :param provider_name: 提供商名称
-        :return: 配置字典
+        生成响应
+        :param prompt: 提示文本
+        :param tools: 可用工具列表
+        :param stream: 是否使用流式输出
+        :return: 响应文本、工具调用或流式生成器
         """
-        try:
-            with open("config/provider_config.json") as f:
-                provider_configs = json.load(f)
-                config = provider_configs.get(provider_name, {})
-        except (FileNotFoundError, json.JSONDecodeError):
-            self._debug_print("警告: 无法加载提供商配置文件，使用空配置")
-            config = {}
-        return config
-
+        return self.provider.generate_response(prompt, tools or [], stream)
+    
     def get_supported_models(self, provider_name: Optional[str] = None) -> Dict[str, list]:
         """
         获取支持的模型列表
         :param provider_name: 提供商名称，如果为None则返回所有提供商的模型
         :return: 提供商名称到模型列表的映射
         """
-        try:
-            with open("config/provider_config.json") as f:
-                provider_configs = json.load(f)
-                
-            result = {}
-            if provider_name:
-                if provider_name not in provider_configs:
-                    return {provider_name: []}
-                config = provider_configs[provider_name]
-                result[provider_name] = config.get("supported_models", [])
-            else:
-                for name, config in provider_configs.items():
-                    result[name] = config.get("supported_models", [])
-            
-            return result
-        except (FileNotFoundError, json.JSONDecodeError):
-            self._debug_print("警告: 无法加载提供商配置文件")
-            return {}
-
-    def generate_response(self, prompt: str, tools: Optional[list] = None, stream: bool = False) -> Union[Dict[str, Any], Generator[str, None, None], str]:
-        """
-        生成响应，直接返回提供商的原始响应。
-        :param prompt: 用户输入
-        :param tools: 可用工具列表
-        :param stream: 是否启用流式输出
-        :return: 提供商返回的原始响应
-            - 工具调用: {"tool_call": {"name": str, "arguments": str}}
-            - 流式输出: Generator[str, None, None]
-            - 普通文本: str
-        """
-        try:
-            # 将参数传递给provider，返回原始响应
-            response = self.provider.generate_response(prompt, tools or [], stream=stream)
-            self._debug_print(f"原始响应类型: {type(response)}")
-            return response
-        except Exception as e:
-            self._debug_print(f"生成响应错误: {e}")
-            return {"error": str(e)}
+        # 这里可以实现一个获取支持模型的逻辑
+        # 暂时返回一个简单的映射
+        models = {
+            "openai": ["gpt-3.5-turbo", "gpt-4"],
+            "openai_compatible": ["自定义模型"],
+            "siliconflow": ["deepseek-ai/DeepSeek-V3", "01-ai/Yi-1.5-34B"],
+            "openrouter": ["deepseek/deepseek-r1-0528", "anthropic/claude-3-opus", "google/gemini-pro"]
+        }
+        
+        if provider_name:
+            return {provider_name: models.get(provider_name, [])}
+        return models
 
 # 示例用法
 if __name__ == "__main__":

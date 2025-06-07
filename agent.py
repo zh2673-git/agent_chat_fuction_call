@@ -150,80 +150,140 @@ class ChatAgent:
 
     def _handle_tool_call(self, response: dict, original_prompt: str) -> Generator[str, None, None]:
         """
-        处理工具调用响应
-        :param response: 工具调用响应
+        处理工具调用响应，统一处理所有工具调用，不再区分单工具和多工具
+        :param response: 工具调用响应，格式为 {"tool_calls": [{"id": str, "name": str, "arguments": str}, ...]}
         :param original_prompt: 原始用户提问
         :return: 生成器，逐块返回流式输出
         """
-        tool_name = response["tool_call"]["name"]
-        tool_args_str = response["tool_call"]["arguments"]
+        # 确保响应中包含工具调用
+        if "tool_calls" not in response or not response["tool_calls"]:
+            yield "未找到有效的工具调用"
+            return
         
-        # 调试信息
-        self._debug_print(f"工具调用: {tool_name}")
-        self._debug_print(f"工具参数(原始): {tool_args_str}")
+        tool_calls = response["tool_calls"]
+        tool_count = len(tool_calls)
+        self._debug_print(f"检测到 {tool_count} 个工具调用")
         
-        try:
-            # 尝试解析工具参数为字典
-            tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
+        # 存储所有工具执行结果
+        tool_results = []
+        
+        # 依次处理每个工具调用
+        for i, tool_call in enumerate(tool_calls):
+            tool_id = tool_call.get("id", f"call_{i}")
+            tool_name = tool_call["name"]
+            tool_args_str = tool_call["arguments"]
             
-            # 调试信息
-            self._debug_print(f"工具参数(解析后): {tool_args}")
+            yield f"[工具调用 {i+1}/{tool_count}] 使用工具: {tool_name}\n"
             
-            if not isinstance(tool_args, dict): # 确保解析结果是字典
-                raise ValueError("Tool arguments are not a valid JSON dictionary.")
-            
-            # 执行工具调用
-            tool_result = self._execute_tool(tool_name, tool_args)
-            
-            # 检查是否有错误
-            if isinstance(tool_result, dict) and "error" in tool_result:
-                yield f"工具执行错误: {tool_result['error']}"
-                return
-            
-            # 显示工具调用信息
-            filtered_args = {k: v for k, v in tool_args.items()}  # 使用所有参数
-            yield f"[工具调用] 使用工具: {tool_name}\n"
-            yield f"[工具参数] {json.dumps(filtered_args, ensure_ascii=False)}\n"
-            yield f"[工具结果] {tool_result}\n"
-            yield f"[模型回复] "
-            
-            # 构建带有工具执行结果的新提示
-            tool_execution_prompt = f"""
-用户问题: {original_prompt}
-工具名称: {tool_name}
-工具参数: {json.dumps(filtered_args, ensure_ascii=False)}
-工具结果: {tool_result}
-
-请根据以上信息，生成一个自然、友好的回答，直接回应用户的问题。
-不要提及"工具调用"、"参数"等技术细节，而是像在自然对话中一样回答。
-"""
-            # 将工具执行结果传回给LLM，获取总结性回答
-            summary_response = self.llm.generate_response(tool_execution_prompt, stream=False)
-            
-            # 处理总结响应
-            if isinstance(summary_response, str):
-                # 直接是文本响应
-                summary = summary_response
-                for chunk in self._stream_text(summary):
-                    yield chunk
+            try:
+                # 尝试解析工具参数为字典
+                tool_args = json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
+                
+                if not isinstance(tool_args, dict): # 确保解析结果是字典
+                    raise ValueError("工具参数不是有效的JSON字典")
+                
+                # 显示工具参数
+                yield f"[工具参数] {json.dumps(tool_args, ensure_ascii=False)}\n"
+                
+                # 执行工具调用
+                tool_result = self._execute_tool(tool_name, tool_args)
+                
+                # 检查是否有错误
+                if isinstance(tool_result, dict) and "error" in tool_result:
+                    error_msg = f"[工具执行错误] {tool_result['error']}"
+                    yield f"{error_msg}\n"
+                    tool_results.append({
+                        "id": tool_id,
+                        "name": tool_name,
+                        "args": tool_args,
+                        "result": error_msg,
+                        "success": False
+                    })
+                else:
+                    # 显示工具结果
+                    yield f"[工具结果] {tool_result}\n"
+                    tool_results.append({
+                        "id": tool_id,
+                        "name": tool_name,
+                        "args": tool_args,
+                        "result": tool_result,
+                        "success": True
+                    })
+                
+                # 如果不是最后一个工具调用，添加分隔符
+                if i < tool_count - 1:
+                    yield "\n---\n\n"
+                
+            except json.JSONDecodeError:
+                error_msg = f"工具参数解析失败，非法的 JSON 格式: {tool_args_str}"
+                self._debug_print(f"错误: {error_msg}")
+                yield f"[错误] {error_msg}\n"
+                tool_results.append({
+                    "id": tool_id,
+                    "name": tool_name,
+                    "args": tool_args_str,
+                    "result": error_msg,
+                    "success": False
+                })
+            except Exception as e:
+                error_msg = f"工具执行失败: {e}"
+                self._debug_print(f"错误: {error_msg}")
+                yield f"[错误] {error_msg}\n"
+                tool_results.append({
+                    "id": tool_id,
+                    "name": tool_name,
+                    "args": tool_args_str if 'tool_args' not in locals() else tool_args,
+                    "result": error_msg,
+                    "success": False
+                })
+        
+        # 所有工具都执行完毕后，生成总结性回复
+        yield f"[模型回复] "
+        
+        # 构建带有所有工具执行结果的新提示
+        tool_results_summary = []
+        for i, result in enumerate(tool_results):
+            if result["success"]:
+                tool_results_summary.append(
+                    f"工具{i+1}: {result['name']}\n"
+                    f"参数: {json.dumps(result['args'], ensure_ascii=False)}\n"
+                    f"结果: {result['result']}"
+                )
             else:
-                # 直接返回工具结果，不做特殊处理
-                for chunk in self._stream_text(str(tool_result)):
-                    yield chunk
-                summary = str(tool_result)  # 如果没有总结，使用工具结果作为总结
+                tool_results_summary.append(
+                    f"工具{i+1}: {result['name']}\n"
+                    f"参数: {json.dumps(result['args'], ensure_ascii=False)}\n"
+                    f"结果: {result['result']} (执行失败)"
+                )
+        
+        multi_tools_prompt = f"""
+用户问题: {original_prompt}
+
+以下是工具的执行结果:
+{"=" * 40}
+{("\n" + "=" * 40 + "\n").join(tool_results_summary)}
+{"=" * 40}
+
+请根据以上所有工具的执行结果，生成一个综合性的、自然友好的回答，直接回应用户的问题。
+不要提及"工具调用"、"参数"等技术细节，而是像在自然对话中一样回答。
+如果有多个相关问题，请分别回答每个问题。
+"""
+        
+        # 将工具执行结果传回给LLM，获取总结性回答
+        summary_response = self.llm.generate_response(multi_tools_prompt, stream=False)
+        
+        # 处理总结响应
+        if isinstance(summary_response, str):
+            # 直接是文本响应
+            for chunk in self._stream_text(summary_response):
+                yield chunk
             
-            # 更新对话历史中的最后一条消息，包含完整的工具调用和模型回复
-            full_response = f"[工具调用] 使用工具: {tool_name}\n[工具参数] {json.dumps(filtered_args, ensure_ascii=False)}\n[工具结果] {tool_result}\n[模型回复] {summary}"
+            # 更新对话历史
+            full_response = f"[工具调用结果]\n{summary_response}"
             self.conversation_history.append({"role": "assistant", "content": full_response})
-            
-        except json.JSONDecodeError:
-            error_msg = f"工具参数解析失败，非法的 JSON 格式: {tool_args_str}"
-            self._debug_print(f"错误: {error_msg}")
-            yield error_msg
-        except Exception as e:
-            error_msg = f"工具执行失败: {e}"
-            self._debug_print(f"错误: {error_msg}")
-            yield error_msg
+        else:
+            # 如果没有得到有效的总结，返回简单提示
+            yield "已完成工具调用，但无法生成综合回复。"
 
     def run(self, prompt: str) -> Generator[str, None, None]:
         """
@@ -260,11 +320,22 @@ class ChatAgent:
             return
 
         # 6. 处理工具调用响应
-        if isinstance(response, dict) and "tool_call" in response:
-            # 使用专门的方法处理工具调用
-            for chunk in self._handle_tool_call(response, prompt):
-                yield chunk
-            return
+        if isinstance(response, dict):
+            if "tool_calls" in response:
+                # 使用统一的方法处理工具调用
+                for chunk in self._handle_tool_call(response, prompt):
+                    yield chunk
+                return
+            elif "multi_responses" in response:
+                # 处理多个回复
+                self._debug_print(f"检测到多个回复: {len(response['multi_responses'])}")
+                for i, resp in enumerate(response['multi_responses']):
+                    yield f"回复 {i+1}/{len(response['multi_responses'])}:\n{resp}\n\n"
+                
+                # 更新对话历史
+                full_response = "\n\n".join(response['multi_responses'])
+                self.conversation_history.append({"role": "assistant", "content": full_response})
+                return
 
         # 7. 处理流式输出
         full_response = []
@@ -276,6 +347,14 @@ class ChatAgent:
                         error_msg = chunk["error"]
                         self._debug_print(f"流式输出错误: {error_msg}")
                         yield f"错误: {error_msg}"
+                        return
+                        
+                    # 检查流式输出中的工具调用
+                    if isinstance(chunk, dict) and "tool_calls" in chunk:
+                        # 处理流式工具调用
+                        self._debug_print("在流式输出中检测到工具调用")
+                        for tool_chunk in self._handle_tool_call(chunk, prompt):
+                            yield tool_chunk
                         return
                         
                     if chunk:  # 确保块不为空

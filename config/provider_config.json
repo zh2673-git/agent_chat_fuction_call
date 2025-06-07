@@ -13,5 +13,131 @@
     "default_model": "Qwen/Qwen3-235B-A22B",
     "timeout": 30,
     "max_retries": 3
+  },
+  "anthropic": {
+    "api_url": "https://api.anthropic.com",
+    "supported_models": ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+    "default_model": "claude-3-opus-20240229",
+    "timeout": 60,
+    "max_retries": 3
+  },
+  "siliconflow": {
+    "provider_name": "硅基流动",
+    "api_url": "https://api.siliconflow.cn/v1",
+    "env_key": "SILICONFLOW_API_KEY",
+    "supported_models": [
+      "Qwen/QwQ-32B", 
+      "Qwen/QwQ-72B", 
+      "Qwen/QwQ-Max", 
+      "Qwen/Qwen2-72B-Instruct", 
+      "Qwen/Qwen1.5-110B-Chat",
+      "Qwen/Qwen1.5-72B-Chat", 
+      "Qwen/Qwen1.5-32B-Chat", 
+      "Qwen/Qwen1.5-14B-Chat", 
+      "Qwen/Qwen1.5-7B-Chat",
+      "Qwen/Qwen1.5-1.8B-Chat",
+      "Baichuan/Baichuan2-53B", 
+      "Baichuan/Baichuan2-13B",
+      "Baichuan/Baichuan2-7B",
+      "Yi/Yi-34B-Chat",
+      "Yi/Yi-6B-Chat",
+      "THUDM/ChatGLM3-6B",
+      "InternLM/InternLM2-20B-Chat",
+      "InternLM/InternLM2-7B-Chat",
+      "InternLM/InternLM2-1.8B-Chat",
+      "deepseek-ai/DeepSeek-R1",
+      "deepseek-ai/DeepSeek-V3"
+    ],
+    "default_model": "deepseek-ai/DeepSeek-V3",
+    "timeout": 60,
+    "max_retries": 3,
+    "debug": true
+  },
+  "openrouter": {
+    "provider_name": "OpenRouter",
+    "api_url": "https://openrouter.ai/api/v1",
+    "env_key": "OPENROUTER_API_KEY",
+    "supported_models": [
+      "deepseek/deepseek-r1-0528:free",
+      "anthropic/claude-3-opus:free",
+      "anthropic/claude-3-sonnet:free",
+      "anthropic/claude-3-haiku:free",
+      "meta-llama/llama-3-70b-instruct:free",
+      "meta-llama/llama-3-8b-instruct:free",
+      "google/gemma-7b-it:free",
+      "mistralai/mistral-7b-instruct:free",
+      "mistralai/mixtral-8x7b-instruct:free"
+    ],
+    "default_model": "deepseek/deepseek-r1-0528:free",
+    "timeout": 60,
+    "max_retries": 3,
+    "extra_headers": {
+      "HTTP-Referer": "https://your-site-url.com",
+      "X-Title": "Your Site Name"
+    }
+  },
+  "azure": {
+    "provider_type": "openai_compatible",
+    "provider_name": "Azure OpenAI",
+    "api_url": "https://{your-resource-name}.openai.azure.com/openai/deployments/{deployment-id}",
+    "supported_models": ["{deployment-id}"],
+    "default_model": "{deployment-id}",
+    "headers": {
+      "api-key": "{your-api-key}"
+    },
+    "timeout": 60,
+    "max_retries": 3
+  },
+  "moonshot": {
+    "provider_type": "openai_compatible",
+    "provider_name": "Moonshot AI",
+    "api_url": "https://api.moonshot.cn/v1",
+    "env_key": "MOONSHOT_API_KEY",
+    "supported_models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    "default_model": "moonshot-v1-8k",
+    "timeout": 60,
+    "max_retries": 3
+  },
+  "groq": {
+    "provider_type": "openai_compatible",
+    "provider_name": "Groq",
+    "api_url": "https://api.groq.com/openai/v1",
+    "env_key": "GROQ_API_KEY",
+    "supported_models": ["llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768", "gemma-7b-it"],
+    "default_model": "llama3-70b-8192",
+    "timeout": 30,
+    "max_retries": 3
+  },
+  "zhipu": {
+    "provider_type": "openai_compatible",
+    "provider_name": "智谱 AI",
+    "api_url": "https://open.bigmodel.cn/api/paas/v4",
+    "env_key": "ZHIPU_API_KEY",
+    "supported_models": ["glm-4", "glm-3-turbo"],
+    "default_model": "glm-4",
+    "timeout": 60,
+    "max_retries": 3
+  },
+  "baichuan": {
+    "provider_type": "openai_compatible",
+    "provider_name": "百川智能",
+    "api_url": "https://api.baichuan-ai.com/v1",
+    "env_key": "BAICHUAN_API_KEY",
+    "supported_models": ["Baichuan3-Turbo", "Baichuan3-Plus", "Baichuan3-Discover"],
+    "default_model": "Baichuan3-Turbo",
+    "timeout": 60,
+    "max_retries": 3
+  },
+  "openai_compatible": {
+    "provider_type": "openai_compatible",
+    "provider_name": "OpenAI兼容API",
+    "api_url": "https://your-api-endpoint.com/v1",
+    "supported_models": ["your-model-name"],
+    "default_model": "your-model-name",
+    "timeout": 60,
+    "max_retries": 3,
+    "headers": {
+      "custom-header": "custom-value"
+    }
   }
 }

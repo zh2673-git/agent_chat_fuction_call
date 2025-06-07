@@ -1,11 +1,11 @@
-from openai import OpenAI
 from .base import BaseProvider
 import os
 import requests
-from typing import Union, Generator, Dict, Any, Optional, List
+from typing import Union, Generator, Dict, Any, Optional
 import json
+import re
 
-class ModelscopeProvider(BaseProvider):
+class SiliconflowProvider(BaseProvider):
     @classmethod
     def from_config(cls, config: dict):
         """
@@ -13,13 +13,13 @@ class ModelscopeProvider(BaseProvider):
         :param config: 配置字典，包含api_key, api_url, model_name等
         """
         # 获取API密钥，优先使用环境变量
-        api_key = os.getenv("MODELSCOPE_API_KEY", config.get("api_key"))
+        api_key = os.getenv("SILICONFLOW_API_KEY", config.get("api_key"))
         
-        # 获取API URL，默认使用DashScope兼容模式
-        api_url = config.get("api_url", "https://dashscope.aliyuncs.com/compatible-mode/v1/").rstrip("/") + "/"
+        # 获取API URL
+        api_url = config.get("api_url", "https://api.siliconflow.cn/v1").rstrip("/") + "/"
         
-        # 获取模型名称，默认使用qwen-max
-        model_name = config.get("model_name", "qwen-max")
+        # 获取模型名称，默认使用deepseek-ai/DeepSeek-V3
+        model_name = config.get("model_name", "deepseek-ai/DeepSeek-V3")
         
         # 获取超时和重试设置
         timeout = config.get("timeout", 60)
@@ -37,19 +37,18 @@ class ModelscopeProvider(BaseProvider):
             debug=debug
         )
     
-    def __init__(self, api_key: str, api_url: str, model_name: str, 
-                 timeout: int = 60, max_retries: int = 3, debug: bool = False):
+    def __init__(self, api_key: str, api_url: str, model_name: str, timeout: int = 60, max_retries: int = 3, debug: bool = False):
         """
-        初始化ModelScope提供商
+        初始化硅基流动提供商
         :param api_key: API密钥
         :param api_url: API URL
-        :param model_name: 模型名称，例如qwen-max, Qwen/Qwen3-235B-A22B等
+        :param model_name: 模型名称
         :param timeout: 请求超时时间(秒)
         :param max_retries: 最大重试次数
         :param debug: 是否启用调试模式
         """
         if not api_key or api_key == "use_env_variable":
-            raise ValueError("MODELSCOPE_API_KEY 未配置或无效")
+            raise ValueError("SILICONFLOW_API_KEY 未配置或无效")
         
         self.api_key = api_key
         self.api_url = api_url
@@ -59,12 +58,11 @@ class ModelscopeProvider(BaseProvider):
         self.debug = debug
         self.headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-ModelScope-Required": "true"
+            "Content-Type": "application/json"
         }
         
         if self.debug:
-            print(f"初始化ModelScope提供商，使用模型: {model_name}")
+            print(f"初始化硅基流动提供商，使用模型: {model_name}")
 
     def _debug_print(self, *args, **kwargs):
         """调试信息打印函数，只在调试模式下输出"""
@@ -72,7 +70,7 @@ class ModelscopeProvider(BaseProvider):
             print(*args, **kwargs)
 
     def _convert_tools(self, tools: list) -> list:
-        """将通用工具格式转换为ModelScope格式"""
+        """将通用工具格式转换为硅基流动格式"""
         if not tools:
             return []
             
@@ -126,13 +124,14 @@ class ModelscopeProvider(BaseProvider):
                     {"role": "user", "content": prompt}
                 ],
                 "stream": stream,
-                "enable_thinking": False  # 关键参数，非流式调用必须为false
+                "temperature": 0.7,
+                "max_tokens": 2048
             }
             
             # 添加工具信息
-            modelscope_tools = self._convert_tools(tools)
-            if modelscope_tools:
-                data["tools"] = modelscope_tools
+            siliconflow_tools = self._convert_tools(tools)
+            if siliconflow_tools:
+                data["tools"] = siliconflow_tools
             
             # 对于流式输出，先检查是否有工具调用
             if stream:
@@ -214,12 +213,67 @@ class ModelscopeProvider(BaseProvider):
                     
                     # 如果没有工具调用，返回内容
                     if "choices" in result and "message" in result["choices"][0] and "content" in result["choices"][0]["message"]:
-                        return result["choices"][0]["message"]["content"]
+                        content = result["choices"][0]["message"]["content"]
+                        
+                        # 检查是否包含多个回复（通过分隔符或格式判断）
+                        # 这里可以根据实际情况添加更复杂的逻辑
+                        if "\n\n问题1:" in content or "\n\n问题 1:" in content:
+                            # 尝试将内容分割成多个回复
+                            self._debug_print("检测到多个回复，尝试分割")
+                            return {
+                                "multi_responses": self._split_multiple_responses(content)
+                            }
+                        
+                        return content
                     
                     return "无法获取有效回复"
                 else:
                     return {"error": f"API错误: {response.status_code} - {response.text}"}
             
         except Exception as e:
-            self._debug_print(f"ModelScope API错误: {str(e)}")
-            return {"error": f"ModelScope API错误: {str(e)}"}
+            self._debug_print(f"硅基流动API错误: {str(e)}")
+            return {"error": f"硅基流动API错误: {str(e)}"}
+
+    def _split_multiple_responses(self, content: str) -> list:
+        """
+        尝试将包含多个回复的内容分割成单独的回复列表
+        :param content: 包含多个回复的文本内容
+        :return: 回复列表
+        """
+        # 常见的多回复分隔模式
+        patterns = [
+            r"问题\s*\d+[:：]", 
+            r"回答\s*\d+[:：]",
+            r"问题\s*\(?\d+\)?[:：]",
+            r"回答\s*\(?\d+\)?[:：]",
+            r"\d+\.\s*问[:：]",
+            r"\d+\.\s*答[:：]"
+        ]
+        
+        # 尝试使用不同的模式分割
+        for pattern in patterns:
+            matches = re.findall(pattern, content)
+            if len(matches) > 1:
+                # 找到了多个匹配项，使用该模式分割
+                parts = re.split(pattern, content)
+                # 去掉第一个空元素（如果存在）
+                if parts and not parts[0].strip():
+                    parts = parts[1:]
+                
+                # 将分隔符添加回每个部分
+                responses = []
+                for i, part in enumerate(parts):
+                    if i < len(matches):
+                        responses.append(f"{matches[i]}{part.strip()}")
+                    else:
+                        responses.append(part.strip())
+                
+                return responses
+        
+        # 如果没有找到明确的分隔符，尝试按段落分割
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        if len(paragraphs) > 1:
+            return paragraphs
+        
+        # 如果无法分割，返回原始内容作为单个元素
+        return [content] 

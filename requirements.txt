@@ -1,3 +1,4 @@
 # 核心依赖
 requests==2.31.0          # HTTP请求库
 python-dotenv==1.0.0      # 环境变量管理
+openai==1.6.1             # OpenAI API客户端

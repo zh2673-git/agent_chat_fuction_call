@@ -6,6 +6,8 @@
 
 - **多模型供应商支持**：支持OpenAI、ModelScope等多种模型供应商，可轻松扩展
 - **智能工具调用**：根据用户意图自动选择并调用合适的工具
+- **多工具调用支持**：能够处理多个工具的连续调用，解决复杂问题
+- **统一工具调用格式**：通过BaseProvider中的工具调用格式标准化，提高代码可维护性
 - **流式输出**：支持流式生成响应，提供更自然的对话体验
 - **可扩展工具集**：易于添加自定义工具，不需修改核心代码
 - **自动参数提取**：从用户输入中智能提取工具所需参数
@@ -25,7 +27,7 @@ agent_chat_fuction_call/
 │   └── provider_config.json # 供应商配置（API URL、支持模型列表）
 ├── providers/              # 模型供应商实现
 │   ├── __init__.py         # 供应商导出
-│   ├── base.py             # 供应商基类定义
+│   ├── base.py             # 供应商基类定义（包含统一工具调用格式）
 │   ├── openai.py           # OpenAI API实现
 │   └── modelscope.py       # ModelScope API实现
 └── tools/                  # 工具目录
@@ -45,11 +47,16 @@ LLM类作为代理层，负责连接Agent和各模型供应商，不处理具体
 1. 用户向Agent提问
 2. Agent准备工具列表，传递给LLM
 3. LLM将请求转发给对应的模型提供商
-4. 模型决定是否调用工具，返回工具调用信息
+4. 模型决定是否调用工具，返回工具调用信息（单个或多个）
 5. Agent执行工具，将结果再次传给LLM
-6. LLM生成最终回复
+6. LLM生成最终回复，综合所有工具结果
 
-### 3. 配置驱动架构
+### 3. 统一工具调用格式
+- 所有模型供应商的工具调用返回格式统一为：`{"tool_calls": [{"id": str, "name": str, "arguments": str}, ...]}`
+- 通过BaseProvider中的`_extract_tool_calls`方法实现格式标准化
+- 不再区分单工具和多工具调用，使用统一的处理逻辑
+
+### 4. 配置驱动架构
 - **供应商配置**：`config/provider_config.json`定义供应商、支持的模型和默认设置
 - **工具配置**：`tools/config.json`注册工具参数
 - **环境变量**：`.env`管理敏感信息（API密钥）
@@ -99,6 +106,18 @@ Agent回复: [工具调用] 使用工具: translation
 [工具参数] {"text": "你好", "target_lang": "en"}
 [工具结果] [TEST] Translation result: Hello
 [模型回复] "你好"翻译成英文是"Hello"。
+
+用户输入: 查询上海天气并翻译成英文
+Agent回复: [工具调用 1/2] 使用工具: weather
+[工具参数] {"city": "上海"}
+[工具结果] [TEST] Weather for 上海: Cloudy, 22°C
+
+---
+
+[工具调用 2/2] 使用工具: translation
+[工具参数] {"text": "上海天气多云，温度22°C", "target_lang": "en"}
+[工具结果] [TEST] Translation result: Shanghai weather is cloudy, temperature 22°C
+[模型回复] Shanghai weather is cloudy with a temperature of 22°C.
 ```
 
 ## 如何添加新工具
@@ -228,8 +247,11 @@ git push -u origin main
 - [ ] 支持更多模型供应商（如Claude、DeepSeek等）
 - [ ] 增强工具参数提取能力
 - [ ] 添加更多实用工具
-- [ ] 支持多轮工具调用
+- [x] 支持多轮工具调用
+- [x] 统一工具调用格式
 - [ ] 添加Web界面
+- [ ] 支持工具调用结果缓存
+- [ ] 实现对话历史的持久化存储
 
 ## 如何贡献
 
