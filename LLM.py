@@ -4,6 +4,7 @@ import importlib
 from typing import Dict, Any, Optional, Union, Generator, Iterator
 import requests
 from pathlib import Path
+from providers import BaseProvider
 
 class ModelConfig:
     def __init__(self, config_file: str = "model.json"):
@@ -47,120 +48,126 @@ class ModelConfig:
         }
 
 class LargeLanguageModel:
-    def __init__(self, model_provider: str, tool_config_file: str = "tools/config.json", debug: bool = False):
+    def __init__(self, model_provider: str, model_name: Optional[str] = None, debug: bool = False):
         """
         初始化大语言模型调用类
         :param model_provider: 模型供应商名称（如 openai/modelscope）
-        :param tool_config_file: 工具配置文件路径
+        :param model_name: 具体模型名称（如 gpt-4/qwen-max），如果为None则使用配置文件中的默认值
         :param debug: 是否启用调试模式
         """
         self.model_provider = model_provider
+        self.model_name = model_name
         self.debug = debug  # 确保此行在provider初始化之前
-        self.provider = self._load_provider(model_provider)
-        self.tools = self._load_tools(tool_config_file) if tool_config_file else {}
+        self.provider = self._load_provider(model_provider, model_name)
 
     def _debug_print(self, *args, **kwargs):
         """调试信息打印函数，只在调试模式下输出"""
         if self.debug:
             print(*args, **kwargs)
 
-    def _load_provider(self, provider_name: str) -> 'BaseProvider':
+    def _load_provider(self, provider_name: str, model_name: Optional[str] = None) -> 'BaseProvider':
         """
         动态加载模型供应商实现
         :param provider_name: 供应商名称（对应 providers/ 下的模块名）
+        :param model_name: 具体模型名称，如果为None则使用配置文件中的默认值
+        :return: 供应商实例
         """
         try:
-            # 1. 动态导入供应商模块
-            module = importlib.import_module(f"providers.{provider_name}")
+            # 导入providers包
+            import providers
             
-            # 2. 获取供应商类（命名约定：{ProviderName}Provider）
-            provider_class = getattr(module, f"{provider_name.capitalize()}Provider")
-            
-            # 3. 从配置初始化
-            with open("config/model.json") as f:
-                config = json.load(f)[provider_name]
+            # 获取对应的提供商类
+            provider_class_name = f"{provider_name.capitalize()}Provider"
+            if not hasattr(providers, provider_class_name):
+                raise ValueError(f"未找到供应商类: {provider_class_name}")
                 
-            return provider_class.from_config(config)
+            provider_class = getattr(providers, provider_class_name)
+            
+            # 从配置文件加载配置
+            provider_config = self._load_provider_config(provider_name)
+            
+            # 添加模型名称到配置中
+            if model_name:
+                # 检查模型是否在支持列表中
+                if "supported_models" in provider_config and model_name not in provider_config["supported_models"]:
+                    self._debug_print(f"警告: 模型 {model_name} 不在 {provider_name} 的支持列表中")
+                provider_config["model_name"] = model_name
+            elif "default_model" in provider_config:
+                provider_config["model_name"] = provider_config["default_model"]
+                
+            # 创建提供商实例
+            return provider_class.from_config(provider_config)
             
         except ImportError as e:
-            raise ValueError(f"未找到供应商实现: {provider_name}") from e
-        except AttributeError:
-            raise ValueError(f"供应商类命名不规范，应为 {provider_name.capitalize()}Provider")
-        except KeyError:
-            raise ValueError(f"config.json 中缺少 {provider_name} 的配置")
+            raise ValueError(f"导入提供商模块失败: {e}")
+        except Exception as e:
+            raise ValueError(f"加载提供商 {provider_name} 失败: {e}")
 
-    def _load_tools(self, config_file: str) -> Dict[str, 'Tool']:
-        """增强版工具加载，自动提取工具参数信息"""
-        with open(config_file, "r") as f:
-            configs = json.load(f)
-        
-        tools = {}
-        for name, config in configs.items():
-            try:
-                module = __import__(f"tools.{name}", fromlist=[f"{name.capitalize()}Tool"])
-                tool_class = getattr(module, f"{name.capitalize()}Tool")
-                tools[name] = tool_class(config)
-                if self.debug:
-                    print(f"成功加载工具: {name}")
-            except Exception as e:
-                if self.debug:
-                    print(f"加载工具 {name} 失败: {e}")
-        return tools
-
-    def generate_response(self, prompt: str, tools: Optional[list] = None, stream: bool = False) -> dict:
+    def _load_provider_config(self, provider_name: str) -> dict:
         """
-        生成响应，支持流式输出和工具调用。
-        :param stream: 是否启用流式输出
-        :return: {
-            "content": str,                 # 非流式模式
-            "stream": Generator[str, None], # 流式模式
-            "tool_call": dict               # 工具调用
-        }
+        加载提供商配置
+        :param provider_name: 提供商名称
+        :return: 配置字典
         """
         try:
-            # 将stream参数传递给provider，由provider负责处理流式输出
+            with open("config/provider_config.json") as f:
+                provider_configs = json.load(f)
+                config = provider_configs.get(provider_name, {})
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._debug_print("警告: 无法加载提供商配置文件，使用空配置")
+            config = {}
+        return config
+
+    def get_supported_models(self, provider_name: Optional[str] = None) -> Dict[str, list]:
+        """
+        获取支持的模型列表
+        :param provider_name: 提供商名称，如果为None则返回所有提供商的模型
+        :return: 提供商名称到模型列表的映射
+        """
+        try:
+            with open("config/provider_config.json") as f:
+                provider_configs = json.load(f)
+                
+            result = {}
+            if provider_name:
+                if provider_name not in provider_configs:
+                    return {provider_name: []}
+                config = provider_configs[provider_name]
+                result[provider_name] = config.get("supported_models", [])
+            else:
+                for name, config in provider_configs.items():
+                    result[name] = config.get("supported_models", [])
+            
+            return result
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._debug_print("警告: 无法加载提供商配置文件")
+            return {}
+
+    def generate_response(self, prompt: str, tools: Optional[list] = None, stream: bool = False) -> Union[Dict[str, Any], Generator[str, None, None], str]:
+        """
+        生成响应，直接返回提供商的原始响应。
+        :param prompt: 用户输入
+        :param tools: 可用工具列表
+        :param stream: 是否启用流式输出
+        :return: 提供商返回的原始响应
+            - 工具调用: {"tool_call": {"name": str, "arguments": str}}
+            - 流式输出: Generator[str, None, None]
+            - 普通文本: str
+        """
+        try:
+            # 将参数传递给provider，返回原始响应
             response = self.provider.generate_response(prompt, tools or [], stream=stream)
             self._debug_print(f"原始响应类型: {type(response)}")
-            
-            # 1. 检查是否为工具调用
-            if isinstance(response, dict) and "tool_call" in response:
-                self._debug_print(f"检测到工具调用: {response['tool_call']}")
-                return {"tool_call": response["tool_call"]}
-            
-            # 2. 检查是否为流式响应
-            if stream and isinstance(response, Generator):
-                self._debug_print("收到流式响应")
-                return {"stream": response}
-            
-            # 3. 处理普通字符串响应
-            if isinstance(response, str):
-                self._debug_print(f"收到字符串响应: {response[:30]}...")
-                return {"content": response}
-            
-            # 4. 处理其他类型响应(兜底)
-            self._debug_print(f"未识别的响应类型: {type(response)}")
-            return {"content": str(response)}
-            
+            return response
         except Exception as e:
             self._debug_print(f"生成响应错误: {e}")
             return {"error": str(e)}
 
-# 抽象基类（也可放在 providers/base.py）
-class BaseProvider:
-    @classmethod
-    def from_config(cls, config: dict) -> 'BaseProvider':
-        """从配置创建实例（子类必须实现）"""
-        raise NotImplementedError
-        
-    def generate_response(self, prompt: str, tools: list, stream: bool = False) -> Union[str, dict, Generator[str, None, None]]:
-        """生成响应（子类必须实现）"""
-        raise NotImplementedError
-
 # 示例用法
 if __name__ == "__main__":
     try:
-        # 指定模型提供商（如 openai 或 deepseek）
-        model = LargeLanguageModel("openai", debug=True)
+        # 指定模型提供商和具体模型名称
+        model = LargeLanguageModel("openai", model_name="gpt-4", debug=True)
 
         # 调用生成方法
         response = model.generate_response("你好，请介绍一下你自己。")
