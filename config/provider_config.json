@@ -10,7 +10,7 @@
     "api_url": "https://api-inference.modelscope.cn/v1/",
     "supported_models": ["qwen-max", "qwen-plus", "qwen-turbo", "Qwen/Qwen3-235B-A22B",
     "deepseek-ai/DeepSeek-R1-0528","deepseek-ai/DeepSeek-V3-0324"],
-    "default_model": "Qwen/Qwen3-235B-A22B",
+    "default_model": "deepseek-ai/DeepSeek-V3-0324",
     "timeout": 30,
     "max_retries": 3
   },
