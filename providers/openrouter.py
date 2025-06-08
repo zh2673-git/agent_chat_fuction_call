@@ -100,60 +100,7 @@ class OpenrouterProvider(BaseProvider):
             for tool in tools
         ]
 
-    def _extract_tool_calls(self, response_data):
-        """
-        从响应中提取工具调用信息
-        :param response_data: API响应数据
-        :return: 工具调用信息，如果没有则返回None
-        """
-        try:
-            # 如果是OpenAI SDK的响应对象
-            if hasattr(response_data, 'choices') and response_data.choices:
-                message = response_data.choices[0].message
-                if hasattr(message, 'tool_calls') and message.tool_calls:
-                    result = []
-                    for i, tool_call in enumerate(message.tool_calls):
-                        result.append({
-                            "id": getattr(tool_call, 'id', f'call_{i}'),
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments
-                        })
-                    return {"tool_calls": result}
-            
-            # 如果是字典（来自JSON）
-            elif isinstance(response_data, dict):
-                if ("choices" in response_data and 
-                    response_data["choices"] and 
-                    "message" in response_data["choices"][0] and
-                    "tool_calls" in response_data["choices"][0]["message"]):
-                    
-                    tool_calls = response_data["choices"][0]["message"]["tool_calls"]
-                    result = []
-                    
-                    for i, tool_call in enumerate(tool_calls):
-                        tool_id = tool_call.get("id", f"call_{i}")
-                        
-                        if "function" in tool_call:
-                            tool_name = tool_call["function"]["name"]
-                            arguments = tool_call["function"]["arguments"]
-                        else:
-                            tool_name = tool_call.get("name", f"unknown_tool_{i}")
-                            arguments = tool_call.get("arguments", "{}")
-                        
-                        result.append({
-                            "id": tool_id,
-                            "name": tool_name,
-                            "arguments": arguments
-                        })
-                    
-                    return {"tool_calls": result}
-            
-            return None
-        except Exception as e:
-            self._debug_print(f"提取工具调用时出错: {str(e)}")
-            return None
-
-    def generate_response(self, prompt: str, tools: list, stream: bool = False) -> Union[str, Dict[str, Any], Generator[str, None, None]]:
+    def generate_response(self, prompt: str, tools: list = None, stream: bool = False) -> Union[str, Dict[str, Any], Generator[str, None, None]]:
         """
         生成响应，返回格式与BaseProvider接口一致
         :return: 
@@ -198,21 +145,18 @@ class OpenrouterProvider(BaseProvider):
                 "extra_headers": extra_headers
             }
             
-            # 只有在有工具并且模型支持工具调用时才添加tools参数
-            if tools and not stream:  # 为简化处理，流式输出暂时不使用工具
+            # 处理工具调用
+            if tools and not stream:  # 流式输出暂时不使用工具
                 try:
+                    # 转换工具格式
                     openrouter_tools = self._convert_tools(tools)
                     if openrouter_tools:
-                        # 先尝试不带工具调用
-                        basic_response = self.client.chat.completions.create(**completion_params)
-                        
-                        # 检查基本响应成功后再尝试工具调用
-                        tool_params = completion_params.copy()
-                        tool_params["tools"] = openrouter_tools
-                        tool_response = self.client.chat.completions.create(**tool_params)
+                        # 直接使用工具调用，不再先尝试基本调用
+                        completion_params["tools"] = openrouter_tools
+                        tool_response = self.client.chat.completions.create(**completion_params)
                         
                         # 提取工具调用
-                        tool_calls_result = self._extract_tool_calls(tool_response)
+                        tool_calls_result = super()._extract_tool_calls(tool_response)
                         if tool_calls_result:
                             return tool_calls_result
                         
@@ -221,7 +165,9 @@ class OpenrouterProvider(BaseProvider):
                     
                 except Exception as e:
                     self._debug_print(f"工具调用失败，回退到基本调用: {str(e)}")
-                    # 工具调用失败，回退到基本调用
+                    # 移除tools参数，回退到基本调用
+                    if "tools" in completion_params:
+                        del completion_params["tools"]
             
             # 处理流式响应
             if stream:
@@ -247,7 +193,9 @@ class OpenrouterProvider(BaseProvider):
                 content = response.choices[0].message.content
                 
                 # 检查是否包含多个回复（通过分隔符或格式判断）
-                if content and ("\n\n问题1:" in content or "\n\n问题 1:" in content):
+                if content and any(pattern in content for pattern in [
+                    "\n\n问题1:", "\n\n问题 1:", "\n\n回答1:", "\n\n回答 1:"
+                ]):
                     # 尝试将内容分割成多个回复
                     self._debug_print("检测到多个回复，尝试分割")
                     return {
@@ -269,6 +217,9 @@ class OpenrouterProvider(BaseProvider):
         :param content: 包含多个回复的文本内容
         :return: 回复列表
         """
+        if not content or len(content) < 10:
+            return [content]
+            
         # 常见的多回复分隔模式
         patterns = [
             r"问题\s*\d+[:：]", 
@@ -276,7 +227,13 @@ class OpenrouterProvider(BaseProvider):
             r"问题\s*\(?\d+\)?[:：]",
             r"回答\s*\(?\d+\)?[:：]",
             r"\d+\.\s*问[:：]",
-            r"\d+\.\s*答[:：]"
+            r"\d+\.\s*答[:：]",
+            r"第\s*\d+\s*个问题[:：]",
+            r"第\s*\d+\s*个回答[:：]",
+            r"问题\s*\d+[\.。]",
+            r"回答\s*\d+[\.。]",
+            r"\d+[\.。]\s*问题[:：]?",
+            r"\d+[\.。]\s*回答[:：]?"
         ]
         
         # 尝试使用不同的模式分割
@@ -297,12 +254,21 @@ class OpenrouterProvider(BaseProvider):
                     else:
                         responses.append(part.strip())
                 
-                return responses
+                # 过滤掉空响应
+                return [r for r in responses if r.strip()]
         
-        # 如果没有找到明确的分隔符，尝试按段落分割
+        # 检查是否有明显的数字序号段落
+        numbered_pattern = r"^\s*\d+[\.\、\:]"
         paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
         if len(paragraphs) > 1:
-            return paragraphs
+            # 检查是否每个段落都以数字开头
+            numbered_paragraphs = [p for p in paragraphs if re.match(numbered_pattern, p)]
+            if len(numbered_paragraphs) > 1 and len(numbered_paragraphs) == len(paragraphs):
+                return numbered_paragraphs
+            
+            # 如果段落数量合理，直接按段落分割
+            if 2 <= len(paragraphs) <= 10:
+                return paragraphs
         
         # 如果无法分割，返回原始内容作为单个元素
         return [content] 
