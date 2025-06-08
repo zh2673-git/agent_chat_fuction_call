@@ -2,12 +2,14 @@ from .base import BaseProvider
 from .openai_compatible import OpenAICompatibleProvider
 from .siliconflow import SiliconflowProvider
 from .openrouter import OpenrouterProvider
+from .modelscope import ModelscopeProvider
 
 __all__ = [
     "BaseProvider",
     "OpenAICompatibleProvider",
     "SiliconflowProvider",
     "OpenrouterProvider",
+    "ModelscopeProvider",
     "get_provider"
 ]
 
@@ -25,7 +27,8 @@ def get_provider(provider_name: str, config: dict = None):
         "openai": OpenAICompatibleProvider,
         "openai_compatible": OpenAICompatibleProvider,
         "siliconflow": SiliconflowProvider,
-        "openrouter": OpenrouterProvider
+        "openrouter": OpenrouterProvider,
+        "modelscope": ModelscopeProvider
     }
     
     if provider_name not in providers:
