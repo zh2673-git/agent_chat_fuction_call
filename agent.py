@@ -404,7 +404,7 @@ class ChatAgent:
         """
         return {
             "provider": self.model_provider,
-            "model": self.model_name or "默认"
+            "model": self.llm.model_name
         }
 
 # 示例用法

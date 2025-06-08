@@ -59,6 +59,7 @@
     "env_key": "OPENROUTER_API_KEY",
     "supported_models": [
       "deepseek/deepseek-r1-0528:free",
+      "deepseek/deepseek-chat-v3-0324:free",
       "anthropic/claude-3-opus:free",
       "anthropic/claude-3-sonnet:free",
       "anthropic/claude-3-haiku:free",
@@ -68,7 +69,7 @@
       "mistralai/mistral-7b-instruct:free",
       "mistralai/mixtral-8x7b-instruct:free"
     ],
-    "default_model": "deepseek/deepseek-r1-0528:free",
+    "default_model": "deepseek/deepseek-chat-v3-0324:free",
     "timeout": 60,
     "max_retries": 3,
     "extra_headers": {

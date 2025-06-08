@@ -1,9 +1,9 @@
 from .base import BaseProvider
 import os
-import requests
+import re
 from typing import Union, Generator, Dict, Any, Optional
 import json
-import re
+from openai import OpenAI
 
 class OpenrouterProvider(BaseProvider):
     @classmethod
@@ -16,7 +16,7 @@ class OpenrouterProvider(BaseProvider):
         api_key = os.getenv("OPENROUTER_API_KEY", config.get("api_key"))
         
         # 获取API URL
-        api_url = config.get("api_url", "https://openrouter.ai/api/v1").rstrip("/") + "/"
+        api_url = config.get("api_url", "https://openrouter.ai/api/v1").rstrip("/")
         
         # 获取模型名称，默认使用deepseek/deepseek-r1-0528:free
         model_name = config.get("model_name", "deepseek/deepseek-r1-0528:free")
@@ -62,16 +62,14 @@ class OpenrouterProvider(BaseProvider):
         self.timeout = timeout
         self.max_retries = max_retries
         self.debug = debug
+        self.extra_headers = extra_headers or {}
         
-        # 构建请求头
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        # 添加额外的请求头
-        if extra_headers:
-            self.headers.update(extra_headers)
+        # 初始化OpenAI客户端
+        self.client = OpenAI(
+            base_url=self.api_url,
+            api_key=self.api_key,
+            timeout=self.timeout
+        )
         
         if self.debug:
             print(f"初始化OpenRouter提供商，使用模型: {model_name}")
@@ -102,9 +100,58 @@ class OpenrouterProvider(BaseProvider):
             for tool in tools
         ]
 
-    def _check_tool_call(self, response_json: dict) -> Optional[Dict[str, Any]]:
-        """检查响应中是否包含工具调用，使用统一的格式"""
-        return self._extract_tool_calls(response_json)
+    def _extract_tool_calls(self, response_data):
+        """
+        从响应中提取工具调用信息
+        :param response_data: API响应数据
+        :return: 工具调用信息，如果没有则返回None
+        """
+        try:
+            # 如果是OpenAI SDK的响应对象
+            if hasattr(response_data, 'choices') and response_data.choices:
+                message = response_data.choices[0].message
+                if hasattr(message, 'tool_calls') and message.tool_calls:
+                    result = []
+                    for i, tool_call in enumerate(message.tool_calls):
+                        result.append({
+                            "id": getattr(tool_call, 'id', f'call_{i}'),
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        })
+                    return {"tool_calls": result}
+            
+            # 如果是字典（来自JSON）
+            elif isinstance(response_data, dict):
+                if ("choices" in response_data and 
+                    response_data["choices"] and 
+                    "message" in response_data["choices"][0] and
+                    "tool_calls" in response_data["choices"][0]["message"]):
+                    
+                    tool_calls = response_data["choices"][0]["message"]["tool_calls"]
+                    result = []
+                    
+                    for i, tool_call in enumerate(tool_calls):
+                        tool_id = tool_call.get("id", f"call_{i}")
+                        
+                        if "function" in tool_call:
+                            tool_name = tool_call["function"]["name"]
+                            arguments = tool_call["function"]["arguments"]
+                        else:
+                            tool_name = tool_call.get("name", f"unknown_tool_{i}")
+                            arguments = tool_call.get("arguments", "{}")
+                        
+                        result.append({
+                            "id": tool_id,
+                            "name": tool_name,
+                            "arguments": arguments
+                        })
+                    
+                    return {"tool_calls": result}
+            
+            return None
+        except Exception as e:
+            self._debug_print(f"提取工具调用时出错: {str(e)}")
+            return None
 
     def generate_response(self, prompt: str, tools: list, stream: bool = False) -> Union[str, Dict[str, Any], Generator[str, None, None]]:
         """
@@ -116,134 +163,105 @@ class OpenrouterProvider(BaseProvider):
             - 错误信息: {"error": str}
         """
         try:
-            url = f"{self.api_url}chat/completions"
+            # 添加系统提示
+            system_message = "你是一个有用的AI助手。"
+            if tools:
+                system_message += """当用户询问可以用工具解决的问题时，请确保:
+                1. 正确识别用户查询中的关键信息
+                2. 选择合适的工具
+                3. 提取查询中的所有相关参数值并填入工具参数中
+                4. 不要遗漏用户提到的任何关键信息
+                """
             
-            # 添加系统提示以增强参数提取能力
-            system_message = """
-            你是一个能够调用工具的助手。当用户询问可以用工具解决的问题时，请确保：
-            1. 正确识别用户查询中的关键信息
-            2. 选择合适的工具
-            3. 提取查询中的所有相关参数值并填入工具参数中
-            4. 不要遗漏用户提到的任何关键信息
-            5. 如果用户提出了多个需要不同工具解决的问题，可以按顺序调用多个工具
-            """
+            # 构建请求消息
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt}
+            ]
             
-            # 构建请求数据
-            data = {
-                "model": self.model_name,
-                "messages": [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt}
-                ],
-                "stream": stream,
-                "temperature": 0.7,
-                "max_tokens": 2048
+            # 准备额外请求头
+            extra_headers = {
+                "HTTP-Referer": self.extra_headers.get("HTTP-Referer", "https://agent-chat.app"),
+                "X-Title": self.extra_headers.get("X-Title", "Agent Chat App")
             }
             
-            # 添加工具信息
-            openrouter_tools = self._convert_tools(tools)
-            if openrouter_tools:
-                data["tools"] = openrouter_tools
+            # 如果存在额外请求头，更新它们
+            if self.extra_headers:
+                extra_headers.update(self.extra_headers)
             
-            # 对于流式输出，先检查是否有工具调用
+            # 准备基本请求参数
+            completion_params = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+                "extra_headers": extra_headers
+            }
+            
+            # 只有在有工具并且模型支持工具调用时才添加tools参数
+            if tools and not stream:  # 为简化处理，流式输出暂时不使用工具
+                try:
+                    openrouter_tools = self._convert_tools(tools)
+                    if openrouter_tools:
+                        # 先尝试不带工具调用
+                        basic_response = self.client.chat.completions.create(**completion_params)
+                        
+                        # 检查基本响应成功后再尝试工具调用
+                        tool_params = completion_params.copy()
+                        tool_params["tools"] = openrouter_tools
+                        tool_response = self.client.chat.completions.create(**tool_params)
+                        
+                        # 提取工具调用
+                        tool_calls_result = self._extract_tool_calls(tool_response)
+                        if tool_calls_result:
+                            return tool_calls_result
+                        
+                        # 如果没有工具调用，返回内容
+                        return tool_response.choices[0].message.content
+                    
+                except Exception as e:
+                    self._debug_print(f"工具调用失败，回退到基本调用: {str(e)}")
+                    # 工具调用失败，回退到基本调用
+            
+            # 处理流式响应
             if stream:
-                # 先使用非流式请求检查是否有工具调用
-                data_no_stream = data.copy()
-                data_no_stream["stream"] = False
-                check_response = requests.post(
-                    url, 
-                    headers=self.headers, 
-                    json=data_no_stream,
-                    timeout=self.timeout
-                )
+                completion_params["stream"] = True
                 
-                if check_response.status_code == 200:
-                    check_result = check_response.json()
-                    tool_calls_result = self._check_tool_call(check_result)
-                    if tool_calls_result:
-                        return tool_calls_result
-                
-                # 如果没有工具调用，使用流式输出
                 def stream_response():
-                    with requests.post(
-                        url, 
-                        headers=self.headers, 
-                        json=data, 
-                        stream=True,
-                        timeout=self.timeout
-                    ) as response:
-                        if response.status_code != 200:
-                            yield {"error": f"API错误: {response.status_code}"}
-                            return
-                            
-                        # 读取并解析事件流中的数据
-                        for line in response.iter_lines():
-                            if line:
-                                line = line.decode('utf-8')
-                                if line.startswith('data: '):
-                                    data_str = line[6:]
-                                    if data_str == "[DONE]":
-                                        break
-                                    try:
-                                        json_data = json.loads(data_str)
-                                        if "choices" in json_data and json_data["choices"]:
-                                            delta = json_data["choices"][0].get("delta", {})
-                                            
-                                            # 检查是否有工具调用
-                                            if "tool_calls" in delta:
-                                                # 流式工具调用，提取第一个工具调用
-                                                tool_call = delta["tool_calls"][0]
-                                                return {
-                                                    "tool_calls": [{
-                                                        "id": tool_call.get("id", "call_0"),
-                                                        "name": tool_call["function"]["name"],
-                                                        "arguments": tool_call["function"]["arguments"]
-                                                    }]
-                                                }
-                                            
-                                            if "content" in delta and delta["content"]:
-                                                yield delta["content"]
-                                    except json.JSONDecodeError:
-                                        pass
+                    try:
+                        response_stream = self.client.chat.completions.create(**completion_params)
+                        for chunk in response_stream:
+                            if hasattr(chunk, 'choices') and chunk.choices:
+                                delta = chunk.choices[0].delta
+                                if hasattr(delta, 'content') and delta.content:
+                                    yield delta.content
+                    except Exception as e:
+                        yield {"error": f"OpenRouter API错误: {str(e)}"}
                 
                 return stream_response()
-            else:
-                # 非流式处理
-                response = requests.post(
-                    url, 
-                    headers=self.headers, 
-                    json=data,
-                    timeout=self.timeout
-                )
-                if response.status_code == 200:
-                    result = response.json()
-                    
-                    # 检查是否有工具调用
-                    tool_calls_result = self._check_tool_call(result)
-                    if tool_calls_result:
-                        return tool_calls_result
-                    
-                    # 如果没有工具调用，返回内容
-                    if "choices" in result and "message" in result["choices"][0] and "content" in result["choices"][0]["message"]:
-                        content = result["choices"][0]["message"]["content"]
-                        
-                        # 检查是否包含多个回复（通过分隔符或格式判断）
-                        if "\n\n问题1:" in content or "\n\n问题 1:" in content:
-                            # 尝试将内容分割成多个回复
-                            self._debug_print("检测到多个回复，尝试分割")
-                            return {
-                                "multi_responses": self._split_multiple_responses(content)
-                            }
-                        
-                        return content
-                    
-                    return "无法获取有效回复"
-                else:
-                    return {"error": f"API错误: {response.status_code} - {response.text}"}
             
+            # 基本非流式调用
+            response = self.client.chat.completions.create(**completion_params)
+            
+            if hasattr(response, 'choices') and response.choices:
+                content = response.choices[0].message.content
+                
+                # 检查是否包含多个回复（通过分隔符或格式判断）
+                if content and ("\n\n问题1:" in content or "\n\n问题 1:" in content):
+                    # 尝试将内容分割成多个回复
+                    self._debug_print("检测到多个回复，尝试分割")
+                    return {
+                        "multi_responses": self._split_multiple_responses(content)
+                    }
+                
+                return content
+            
+            return "无法获取有效回复"
+                
         except Exception as e:
-            self._debug_print(f"OpenRouter API错误: {str(e)}")
-            return {"error": f"OpenRouter API错误: {str(e)}"}
+            error_message = str(e)
+            self._debug_print(f"OpenRouter API错误: {error_message}")
+            return {"error": f"OpenRouter API错误: {error_message}"}
 
     def _split_multiple_responses(self, content: str) -> list:
         """

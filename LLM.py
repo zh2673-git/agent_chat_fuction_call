@@ -56,7 +56,6 @@ class LargeLanguageModel:
         :param debug: 是否启用调试模式
         """
         self.provider_name = provider_name
-        self.model_name = model_name
         self.debug = debug
         
         # 加载配置
@@ -64,16 +63,25 @@ class LargeLanguageModel:
         
         # 初始化提供商
         provider_config = self.config.get(provider_name, {})
+        
+        # 保存模型名称，如果未指定则使用默认模型
         if model_name:
             provider_config["model_name"] = model_name
+            self.model_name = model_name
+        else:
+            # 从配置文件中获取默认模型名称
+            self.model_name = provider_config.get("default_model", "未知模型")
+            # 确保provider_config中也包含model_name
+            provider_config["model_name"] = self.model_name
+        
+        if debug:
+            print(f"初始化LLM，提供商: {provider_name}, 模型: {self.model_name}")
+            print(f"提供商配置: {provider_config}")
         
         provider_config["debug"] = debug
         
         # 使用get_provider函数获取提供商实例
         self.provider = get_provider(provider_name, provider_config)
-        
-        if debug:
-            print(f"初始化LLM，提供商: {provider_name}, 模型: {model_name or '默认'}")
 
     def _load_config(self) -> Dict[str, Any]:
         """加载配置文件"""

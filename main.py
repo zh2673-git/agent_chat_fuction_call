@@ -64,7 +64,7 @@ def main():
         # 解析命令行参数
         debug_mode = False
         verbose_mode = False
-        provider = "siliconflow"  # 默认使用硅基流动
+        provider = "openrouter"  # 默认使用硅基流动
         
         i = 1
         while i < len(sys.argv):
@@ -109,6 +109,11 @@ def main():
         
         # 创建Agent实例，传递debug参数
         agent = ChatAgent(provider, debug=debug_mode)
+        
+        # 获取并显示当前使用的模型
+        model_info = agent.get_current_model_info()
+        print(f"使用模型: {model_info.get('model', '默认模型')}")
+        
         print("Agent已成功初始化，可以开始交流")
         
         while True:
