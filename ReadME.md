@@ -2,6 +2,10 @@
 
 一个基于大语言模型（LLM）的智能对话Agent，支持动态工具调用（Function Calling）和流式输出功能。通过简洁的架构设计，实现多模型供应商支持和灵活的工具扩展能力。
 
+![图片描述](images/demo1.png)
+![图片描述](images/demo2.png)
+![图片描述](images/demo3.png)
+
 ## 主要特性
 
 - **多模型供应商支持**：支持OpenAI、ModelScope等多种模型供应商，可轻松扩展
