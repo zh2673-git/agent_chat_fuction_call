@@ -38,7 +38,7 @@ class ModelscopeProvider(BaseProvider):
         )
     
     def __init__(self, api_key: str, api_url: str, model_name: str, 
-                 timeout: int = 60, max_retries: int = 3, debug: bool = False):
+                 timeout: int = 60, max_retries: int = 3, debug: bool = False, extra_headers: dict = None):
         """
         初始化ModelScope提供商
         :param api_key: API密钥
@@ -47,54 +47,17 @@ class ModelscopeProvider(BaseProvider):
         :param timeout: 请求超时时间(秒)
         :param max_retries: 最大重试次数
         :param debug: 是否启用调试模式
+        :param extra_headers: 额外的请求头
         """
-        if not api_key or api_key == "use_env_variable":
-            raise ValueError("MODELSCOPE_API_KEY 未配置或无效")
+        # 调用父类初始化方法
+        super().__init__(api_key, api_url, model_name, debug, timeout, max_retries, extra_headers)
         
-        self.api_key = api_key
-        self.api_url = api_url
-        self.model_name = model_name
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self.debug = debug
+        # 添加ModelScope特定的请求头
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "X-ModelScope-Required": "true"
         }
-        
-        if self.debug:
-            print(f"初始化ModelScope提供商，使用模型: {model_name}")
-
-    def _debug_print(self, *args, **kwargs):
-        """调试信息打印函数，只在调试模式下输出"""
-        if self.debug:
-            print(*args, **kwargs)
-
-    def _convert_tools(self, tools: list) -> list:
-        """将通用工具格式转换为ModelScope格式"""
-        if not tools:
-            return []
-            
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    })
-                }
-            }
-            for tool in tools
-        ]
-
-    def _check_tool_call(self, response_json: dict) -> Optional[Dict[str, Any]]:
-        """检查响应中是否包含工具调用，使用统一的格式"""
-        return self._extract_tool_calls(response_json)
 
     def generate_response(self, prompt: str, tools: list, stream: bool = False) -> Union[str, Dict[str, Any], Generator[str, None, None]]:
         """
@@ -106,17 +69,18 @@ class ModelscopeProvider(BaseProvider):
             - 错误信息: {"error": str}
         """
         try:
-            url = f"{self.api_url}chat/completions"
+            # 确保API URL以正确的格式结尾
+            if not self.api_url.endswith("/"):
+                api_url = f"{self.api_url}/"
+            else:
+                api_url = self.api_url
+                
+            url = f"{api_url}chat/completions"
+            self._debug_print(f"使用API URL: {url}")
+            self._debug_print(f"使用模型: {self.model_name}")
             
-            # 添加系统提示以增强参数提取能力
-            system_message = """
-            你是一个能够调用工具的助手。当用户询问可以用工具解决的问题时，请确保：
-            1. 正确识别用户查询中的关键信息
-            2. 选择合适的工具
-            3. 提取查询中的所有相关参数值并填入工具参数中
-            4. 不要遗漏用户提到的任何关键信息
-            5. 如果用户提出了多个需要不同工具解决的问题，可以按顺序调用多个工具
-            """
+            # 使用基类中的系统提示
+            system_message = self.get_default_system_message()
             
             # 构建请求数据
             data = {
@@ -129,6 +93,10 @@ class ModelscopeProvider(BaseProvider):
                 "enable_thinking": False  # 关键参数，非流式调用必须为false
             }
             
+            # 调试输出请求头和请求体
+            self._debug_print(f"请求头: {self.headers}")
+            self._debug_print(f"请求体: {json.dumps(data, ensure_ascii=False)}")
+            
             # 添加工具信息
             modelscope_tools = self._convert_tools(tools)
             if modelscope_tools:
@@ -139,18 +107,28 @@ class ModelscopeProvider(BaseProvider):
                 # 先使用非流式请求检查是否有工具调用
                 data_no_stream = data.copy()
                 data_no_stream["stream"] = False
-                check_response = requests.post(
-                    url, 
-                    headers=self.headers, 
-                    json=data_no_stream,
-                    timeout=self.timeout
-                )
-                
-                if check_response.status_code == 200:
+                try:
+                    check_response = requests.post(
+                        url, 
+                        headers=self.headers, 
+                        json=data_no_stream,
+                        timeout=self.timeout
+                    )
+                    
+                    self._debug_print(f"非流式检查响应状态码: {check_response.status_code}")
+                    if check_response.status_code != 200:
+                        self._debug_print(f"API错误响应: {check_response.text}")
+                        return {"error": f"API错误: {check_response.status_code} - {check_response.text[:100]}"}
+                        
                     check_result = check_response.json()
-                    tool_calls_result = self._check_tool_call(check_result)
+                    self._debug_print(f"非流式检查响应: {json.dumps(check_result, ensure_ascii=False)[:200]}")
+                    
+                    tool_calls_result = self._extract_tool_calls(check_result)
                     if tool_calls_result:
                         return tool_calls_result
+                except Exception as e:
+                    self._debug_print(f"非流式检查请求失败: {str(e)}")
+                    return {"error": f"请求失败: {str(e)}"}
                 
                 # 如果没有工具调用，使用流式输出
                 def stream_response():
@@ -162,6 +140,7 @@ class ModelscopeProvider(BaseProvider):
                         timeout=self.timeout
                     ) as response:
                         if response.status_code != 200:
+                            self._debug_print(f"流式响应错误: {response.status_code} - {response.text[:100]}")
                             yield {"error": f"API错误: {response.status_code}"}
                             return
                             
@@ -198,28 +177,54 @@ class ModelscopeProvider(BaseProvider):
                 return stream_response()
             else:
                 # 非流式处理
-                response = requests.post(
-                    url, 
-                    headers=self.headers, 
-                    json=data,
-                    timeout=self.timeout
-                )
-                if response.status_code == 200:
-                    result = response.json()
+                try:
+                    self._debug_print(f"发送非流式请求到: {url}")
+                    response = requests.post(
+                        url, 
+                        headers=self.headers, 
+                        json=data,
+                        timeout=self.timeout
+                    )
                     
-                    # 检查是否有工具调用
-                    tool_calls_result = self._check_tool_call(result)
+                    self._debug_print(f"响应状态码: {response.status_code}")
+                    if response.status_code != 200:
+                        error_text = response.text[:200] if response.text else "无响应内容"
+                        self._debug_print(f"API错误响应: {error_text}")
+                        return {"error": f"API错误: {response.status_code} - {error_text}"}
+                    
+                    result = response.json()
+                    self._debug_print(f"API响应: {json.dumps(result, ensure_ascii=False)[:200]}")
+                    
+                    # 使用基类中的工具调用提取方法
+                    tool_calls_result = self._extract_tool_calls(result)
                     if tool_calls_result:
                         return tool_calls_result
                     
                     # 如果没有工具调用，返回内容
-                    if "choices" in result and "message" in result["choices"][0] and "content" in result["choices"][0]["message"]:
-                        return result["choices"][0]["message"]["content"]
+                    if "choices" in result and result["choices"] and isinstance(result["choices"], list):
+                        choice = result["choices"][0]
+                        if isinstance(choice, dict) and "message" in choice and isinstance(choice["message"], dict):
+                            message = choice["message"]
+                            if "content" in message and message["content"]:
+                                content = message["content"]
+                                
+                                # 检查是否包含多个回复
+                                if "\n\n问题1:" in content or "\n\n问题 1:" in content:
+                                    # 使用基类中的方法尝试将内容分割成多个回复
+                                    self._debug_print("检测到多个回复，尝试分割")
+                                    return {
+                                        "multi_responses": self._split_multiple_responses(content)
+                                    }
+                                
+                                return content
                     
                     return "无法获取有效回复"
-                else:
-                    return {"error": f"API错误: {response.status_code} - {response.text}"}
+                except requests.exceptions.RequestException as e:
+                    self._debug_print(f"请求异常: {str(e)}")
+                    return {"error": f"请求异常: {str(e)}"}
             
         except Exception as e:
             self._debug_print(f"ModelScope API错误: {str(e)}")
+            import traceback
+            self._debug_print(f"错误堆栈: {traceback.format_exc()}")
             return {"error": f"ModelScope API错误: {str(e)}"}

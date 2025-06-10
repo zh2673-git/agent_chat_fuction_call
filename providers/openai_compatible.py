@@ -56,15 +56,8 @@ class OpenAICompatibleProvider(BaseProvider):
         :param debug: 是否启用调试模式
         :param extra_headers: 额外的请求头
         """
-        if not api_key or api_key == "use_env_variable":
-            raise ValueError("API密钥未配置或无效")
-        
-        self.api_key = api_key
-        self.api_url = api_url
-        self.model_name = model_name
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self.debug = debug
+        # 调用父类初始化方法
+        super().__init__(api_key, api_url, model_name, debug, timeout, max_retries, extra_headers)
         
         # 构建请求头
         self.headers = {
@@ -75,39 +68,6 @@ class OpenAICompatibleProvider(BaseProvider):
         # 添加额外的请求头
         if extra_headers:
             self.headers.update(extra_headers)
-        
-        if self.debug:
-            print(f"初始化OpenAI兼容API提供商，使用模型: {model_name}")
-
-    def _debug_print(self, *args, **kwargs):
-        """调试信息打印函数，只在调试模式下输出"""
-        if self.debug:
-            print(*args, **kwargs)
-
-    def _convert_tools(self, tools: list) -> list:
-        """将通用工具格式转换为OpenAI格式"""
-        if not tools:
-            return []
-            
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    })
-                }
-            }
-            for tool in tools
-        ]
-
-    def _check_tool_call(self, response_json: dict) -> Optional[Dict[str, Any]]:
-        """检查响应中是否包含工具调用，使用统一的格式"""
-        return self._extract_tool_calls(response_json)
 
     def generate_response(self, prompt: str, tools: list, stream: bool = False) -> Union[str, Dict[str, Any], Generator[str, None, None]]:
         """
@@ -121,15 +81,8 @@ class OpenAICompatibleProvider(BaseProvider):
         try:
             url = f"{self.api_url}chat/completions"
             
-            # 添加系统提示以增强参数提取能力
-            system_message = """
-            你是一个能够调用工具的助手。当用户询问可以用工具解决的问题时，请确保：
-            1. 正确识别用户查询中的关键信息
-            2. 选择合适的工具
-            3. 提取查询中的所有相关参数值并填入工具参数中
-            4. 不要遗漏用户提到的任何关键信息
-            5. 如果用户提出了多个需要不同工具解决的问题，可以按顺序调用多个工具
-            """
+            # 使用基类中的系统提示
+            system_message = self.get_default_system_message()
             
             # 构建请求数据
             data = {
@@ -162,7 +115,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 
                 if check_response.status_code == 200:
                     check_result = check_response.json()
-                    tool_calls_result = self._check_tool_call(check_result)
+                    tool_calls_result = self._extract_tool_calls(check_result)
                     if tool_calls_result:
                         return tool_calls_result
                 
@@ -221,8 +174,8 @@ class OpenAICompatibleProvider(BaseProvider):
                 if response.status_code == 200:
                     result = response.json()
                     
-                    # 检查是否有工具调用
-                    tool_calls_result = self._check_tool_call(result)
+                    # 使用基类中的工具调用提取方法
+                    tool_calls_result = self._extract_tool_calls(result)
                     if tool_calls_result:
                         return tool_calls_result
                     
@@ -230,9 +183,9 @@ class OpenAICompatibleProvider(BaseProvider):
                     if "choices" in result and "message" in result["choices"][0] and "content" in result["choices"][0]["message"]:
                         content = result["choices"][0]["message"]["content"]
                         
-                        # 检查是否包含多个回复（通过分隔符或格式判断）
+                        # 检查是否包含多个回复
                         if "\n\n问题1:" in content or "\n\n问题 1:" in content:
-                            # 尝试将内容分割成多个回复
+                            # 使用基类中的方法尝试将内容分割成多个回复
                             self._debug_print("检测到多个回复，尝试分割")
                             return {
                                 "multi_responses": self._split_multiple_responses(content)
@@ -247,47 +200,3 @@ class OpenAICompatibleProvider(BaseProvider):
         except Exception as e:
             self._debug_print(f"OpenAI兼容API错误: {str(e)}")
             return {"error": f"OpenAI兼容API错误: {str(e)}"}
-
-    def _split_multiple_responses(self, content: str) -> list:
-        """
-        尝试将包含多个回复的内容分割成单独的回复列表
-        :param content: 包含多个回复的文本内容
-        :return: 回复列表
-        """
-        # 常见的多回复分隔模式
-        patterns = [
-            r"问题\s*\d+[:：]", 
-            r"回答\s*\d+[:：]",
-            r"问题\s*\(?\d+\)?[:：]",
-            r"回答\s*\(?\d+\)?[:：]",
-            r"\d+\.\s*问[:：]",
-            r"\d+\.\s*答[:：]"
-        ]
-        
-        # 尝试使用不同的模式分割
-        for pattern in patterns:
-            matches = re.findall(pattern, content)
-            if len(matches) > 1:
-                # 找到了多个匹配项，使用该模式分割
-                parts = re.split(pattern, content)
-                # 去掉第一个空元素（如果存在）
-                if parts and not parts[0].strip():
-                    parts = parts[1:]
-                
-                # 将分隔符添加回每个部分
-                responses = []
-                for i, part in enumerate(parts):
-                    if i < len(matches):
-                        responses.append(f"{matches[i]}{part.strip()}")
-                    else:
-                        responses.append(part.strip())
-                
-                return responses
-        
-        # 如果没有找到明确的分隔符，尝试按段落分割
-        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
-        if len(paragraphs) > 1:
-            return paragraphs
-        
-        # 如果无法分割，返回原始内容作为单个元素
-        return [content] 

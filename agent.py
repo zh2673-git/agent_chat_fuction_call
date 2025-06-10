@@ -5,7 +5,7 @@ from LLM import LargeLanguageModel
 from tools.tool import Tool  # 假设有一个基础工具类
 
 class ChatAgent:
-    def __init__(self, model_provider: str, model_name: Optional[str] = None, tool_config_file: str = "tools/config.json", debug: bool = False):
+    def __init__(self, model_provider: str, model_name: Optional[str] = None, tool_config_file: str = "config/tools_config.json", debug: bool = False):
         """
         聊天机器人Agent，集成LLM和工具调用。
         :param model_provider: 模型提供商（如 openai, modelscope）
